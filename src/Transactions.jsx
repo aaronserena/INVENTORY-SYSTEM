@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { format, parseISO, isWithinInterval, subDays, subMonths, subYears, startOfToday } from 'date-fns';
 import { Search, Receipt, Printer, Calendar, Filter, X, BarChart3 } from 'lucide-react';
 
-export default function Transactions({ salesLogs, products }) {
+export default function Transactions({ salesLogs, products, settings }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [timeframe, setTimeframe] = useState('all'); // 'all' | 'weekly' | 'monthly' | 'yearly'
   const [showPrintConfirm, setShowPrintConfirm] = useState(false);
@@ -193,11 +193,11 @@ export default function Transactions({ salesLogs, products }) {
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-dirty-white p-4 rounded-xl border border-stone-200">
               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Total Revenue ({timeframe})</span>
-              <span className="text-xl font-black text-deep-charcoal">₱{analyticsSummary.revenue.toLocaleString()}</span>
+              <span className="text-xl font-black text-deep-charcoal">{settings.currency}{analyticsSummary.revenue.toLocaleString()}</span>
             </div>
             <div className="bg-dirty-white p-4 rounded-xl border border-stone-200">
               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Net Profit</span>
-              <span className="text-xl font-black text-sage">₱{analyticsSummary.netProfit.toLocaleString()}</span>
+              <span className="text-xl font-black text-sage">{settings.currency}{analyticsSummary.netProfit.toLocaleString()}</span>
             </div>
             <div className="bg-dirty-white p-4 rounded-xl border border-stone-200">
               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Transaction Count</span>
@@ -209,7 +209,7 @@ export default function Transactions({ salesLogs, products }) {
             </div>
             <div className="bg-dirty-white p-4 rounded-xl border border-stone-200 col-span-2">
               <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block mb-1">Total Value of Items on Hand</span>
-              <span className="text-xl font-black text-deep-charcoal">₱{analyticsSummary.potentialRevenue.toLocaleString()}</span>
+              <span className="text-xl font-black text-deep-charcoal">{settings.currency}{analyticsSummary.potentialRevenue.toLocaleString()}</span>
             </div>
           </div>
           <div className="border-t-2 border-dashed border-stone-200 my-8" />
@@ -244,7 +244,7 @@ export default function Transactions({ salesLogs, products }) {
                   </span>
                 </div>
                 <div className="font-bold text-sage">
-                  ₱{transaction.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {settings.currency}{transaction.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
               </div>
               <div className="p-4 print:px-0">
@@ -261,9 +261,9 @@ export default function Transactions({ salesLogs, products }) {
                     {transaction.items.map((item, i) => (
                       <tr key={i} className="border-b border-stone-100 last:border-0">
                         <td className="py-2.5">{item.name}</td>
-                        <td className="py-2.5 text-right hidden sm:table-cell text-stone-accent font-mono">₱{item.price.toFixed(2)}</td>
+                        <td className="py-2.5 text-right hidden sm:table-cell text-stone-accent font-mono">{settings.currency}{item.price.toFixed(2)}</td>
                         <td className="py-2.5 text-center font-medium">x{item.quantity}</td>
-                        <td className="py-2.5 text-right font-bold text-deep-charcoal font-mono">₱{(item.price * item.quantity).toFixed(2)}</td>
+                        <td className="py-2.5 text-right font-bold text-deep-charcoal font-mono">{settings.currency}{(item.price * item.quantity).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>

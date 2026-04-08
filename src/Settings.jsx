@@ -1,488 +1,387 @@
+// v1.0.5 - Enhanced Data Security
 import { useState } from 'react';
-import { PaintBucket, Shield, Languages, Database, X, Lock, Unlock, Trash2 } from 'lucide-react';
+import { PaintBucket, Shield, Languages, Database, X, Lock, Trash2, Download, Upload, AlertTriangle } from 'lucide-react';
 
-export default function Settings({ securityPin, setSecurityPin, products, setProducts, salesLogs, setSalesLogs }) {
-  const [showPinDialog, setShowPinDialog] = useState(false);
-  const [dialogStep, setDialogStep] = useState('setup'); // 'verify' | 'setup' | 'remove'
-  const [verifyInput, setVerifyInput] = useState('');
-  const [tempPin, setTempPin] = useState('');
-  const [confirmPin, setConfirmPin] = useState('');
-  const [isError, setIsError] = useState(false);
-  const [captchaCode, setCaptchaCode] = useState('');
-  const [captchaInput, setCaptchaInput] = useState('');
+export default function Settings({ userEmail, userPin, products, setProducts, salesLogs, setSalesLogs, setIsSystemLocked, onSignOut, settings, setSettings }) {
   const [showBackupModal, setShowBackupModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [confirmEmail, setConfirmEmail] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [error, setError] = useState('');
 
-  const generateCaptcha = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No O, 0, I, 1 for clarity
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    setCaptchaCode(code);
-    setCaptchaInput('');
+  const [showRegionalModal, setShowRegionalModal] = useState(false);
+  const [showPersonalizationModal, setShowPersonalizationModal] = useState(false);
+
+  const updateSetting = (key, value) => {
+    setSettings(prev => ({ ...prev, [key]: value }));
   };
-
-  const [pendingAction, setPendingAction] = useState('setup');
   
   const handleExport = () => {
     const data = {
+      userEmail,
       products,
       salesLogs,
-      securityPin,
+      settings,
       exportDate: new Date().toISOString(),
       version: '1.0.0'
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `inventory_backup_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `inventory_backup_${userEmail}_${new Date().toLocaleDateString()}.json`;
+    link.click();
     URL.revokeObjectURL(url);
   };
 
   const handleImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target.result);
-        if (data.products && data.salesLogs) {
-          if (confirm('Importing this file will overwrite your CURRENT products and sales history. Do you want to proceed?')) {
-            setProducts(data.products);
-            setSalesLogs(data.salesLogs);
-            if (data.securityPin) setSecurityPin(data.securityPin);
-            alert('Data imported successfully!');
-          }
-        } else {
-          alert('Invalid backup file format.');
+        
+        // Validation: Must have at least one of the core data arrays
+        const hasProducts = Array.isArray(data.products);
+        const hasLogs = Array.isArray(data.salesLogs);
+
+        if (!hasProducts && !hasLogs) {
+          alert('Invalid backup file: Could not find any valid product or sales data.');
+          return;
+        }
+
+        const confirmMsg = `Are you sure you want to import this data? ${
+          hasProducts ? `\n- ${data.products.length} Products` : ''
+        }${
+          hasLogs ? `\n- ${data.salesLogs.length} Sales Records` : ''
+        }\n\nWARNING: This will overwrite your current local data for ${userEmail}.`;
+
+        if (confirm(confirmMsg)) {
+          if (hasProducts) setProducts(data.products);
+          if (hasLogs) setSalesLogs(data.salesLogs);
+          if (data.settings) setSettings(data.settings);
+          
+          alert('Data successfully synchronized with your current account!');
         }
       } catch (err) {
-        alert('Error parsing backup file.');
+        console.error('Import Error:', err);
+        alert('Failed to parse backup file. Please ensure it is a valid .json backup exported from this system.');
       }
     };
     reader.readAsText(file);
-    e.target.value = ''; // Reset input
+    e.target.value = ''; // Reset input to allow re-importing same file if needed
   };
 
-  const startPinAction = (step) => {
-    if (securityPin) {
-      setDialogStep('verify');
-      setPendingAction(step); // Save what we want to do after verification
-    } else {
-      setDialogStep('setup');
-    }
-    setShowPinDialog(true);
-    resetForm();
-  };
-
-
-  const resetForm = () => {
-    setVerifyInput('');
-    setTempPin('');
-    setConfirmPin('');
-    setIsError(false);
-  };
-
-  const handleVerify = (e) => {
+  const handleDeleteData = (e) => {
     e.preventDefault();
-    if (verifyInput === securityPin) {
-      if (pendingAction === 'remove') {
-        setSecurityPin('');
-        setShowPinDialog(false);
-      } else if (pendingAction === 'reset') {
-        generateCaptcha();
-        setDialogStep('captcha');
-      } else {
-        setDialogStep('setup');
-        setIsError(false);
-      }
-    } else {
-      setIsError(true);
-      setVerifyInput('');
-      setTimeout(() => setIsError(false), 600);
-    }
-  };
+    setError('');
 
-  const handleSavePin = (e) => {
-    e.preventDefault();
-    if (tempPin.length < 4) return;
-    
-    if (tempPin !== confirmPin) {
-      setIsError(true);
-      setConfirmPin('');
-      setTimeout(() => setIsError(false), 600);
+    if (confirmEmail !== userEmail) {
+      setError('Verification Email does not match.');
       return;
     }
-    
-    setSecurityPin(tempPin);
-    setShowPinDialog(false);
-    resetForm();
-  };
 
-  const handleResetSystem = () => {
-    if (confirm('Are you sure you want to RESET THE ENTIRE SYSTEM? This will permanently delete ALL products and sales history. This action cannot be undone.')) {
+    if (confirmPin !== userPin) {
+      setError('Security PIN is incorrect.');
+      return;
+    }
+
+    setIsDeleting(true);
+    
+    // Simulate deletion delay for gravity
+    setTimeout(() => {
       setProducts([]);
       setSalesLogs([]);
-      alert('System has been completely reset.');
-    }
+      setIsDeleting(false);
+      setShowDeleteModal(false);
+      setConfirmEmail('');
+      setConfirmPin('');
+      alert('Account data has been wiped successfully.');
+    }, 1500);
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto relative">
-      <div>
-        <h2 className="text-2xl font-bold">Settings</h2>
-        <p className="text-stone-500 mt-1">Manage your application preferences and configurations.</p>
+    <div className="p-8 max-w-6xl mx-auto">
+      <div className="mb-10">
+        <h1 className="text-4xl font-black tracking-tight text-deep-charcoal italic uppercase">Settings</h1>
+        <p className="text-stone-500 mt-2 font-medium">Manage your account, data security, and system preferences.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <SettingCard 
-          icon={<PaintBucket size={20} className="text-stone-500" />}
-          title="Appearance"
-          description="Customize the interface color scheme and layout."
-          actionText="Visit UI Editor"
-          disabled
-        />
-        
-        <div className="bg-white border border-stone-200 rounded-lg p-6 flex flex-col items-start hover:border-sage transition-colors shadow-sm relative overflow-hidden">
-          <div className="p-2 bg-dirty-white rounded-lg mb-3">
-            <Shield size={20} className="text-stone-500" />
+        {/* Account Card */}
+        <div className="bg-white border border-stone-200 rounded-3xl p-8 flex flex-col items-start hover:border-sage transition-all shadow-sm group">
+          <div className="p-3 bg-dirty-white rounded-2xl mb-4 group-hover:bg-sage/10 transition-colors">
+            <Shield size={24} className="text-stone-500 group-hover:text-sage" />
           </div>
-          <h3 className="font-bold text-lg mb-1">Account & Security</h3>
-          <p className="text-stone-500 text-sm mb-6 flex-1">
-            {securityPin 
-              ? "Security PIN is currently active. System is protected." 
-              : "Set a security PIN to protect your system from unauthorized access."}
+          <h3 className="font-black text-xl mb-2 italic uppercase">Account & Security</h3>
+          <p className="text-stone-500 text-sm mb-8 flex-1 leading-relaxed">
+            {`Logged in as ${userEmail || 'Administrator'}. This account's inventory data is isolated and encrypted locally.`}
           </p>
-          <div className="flex gap-4 w-full pt-2">
+          <div className="flex flex-col sm:flex-row gap-3 w-full">
             <button 
-              onClick={() => startPinAction('setup')}
-              className="flex-1 px-4 py-2.5 bg-deep-charcoal text-white rounded font-medium text-sm hover:bg-opacity-90 transition-colors shadow-sm"
+              onClick={onSignOut}
+              className="flex-1 px-6 py-4 bg-deep-charcoal text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-opacity-90 transition-all shadow-lg active:scale-95"
             >
-              {securityPin ? "Change PIN" : "Setup PIN"}
+              Sign Out / Switch Account
             </button>
-            {securityPin && (
-              <button 
-                onClick={() => startPinAction('remove')}
-                className="px-4 py-2.5 border border-muted-orange text-muted-orange rounded font-medium text-sm hover:bg-red-50 transition-colors"
-              >
-                Remove
-              </button>
-            )}
           </div>
+        </div>
 
-          {/* PIN Setup Modal Overlay */}
-          {showPinDialog && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              {/* Backdrop */}
-              <div 
-                className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm animate-in fade-in" 
-                onClick={() => setShowPinDialog(false)}
-              />
-              
-              {/* Modal Card */}
-              <div className={`relative bg-white w-full max-w-md rounded-2xl shadow-2xl p-8 animate-in zoom-in-95 slide-in-from-bottom-5 duration-300 ${isError ? 'animate-shake' : ''}`}>
-                <div className="flex justify-between items-center mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-lg transition-colors ${isError ? 'bg-muted-orange/10' : 'bg-sage/10'}`}>
-                      <Lock size={20} className={isError ? 'text-muted-orange' : 'text-sage'} />
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-lg text-deep-charcoal">
-                        {dialogStep === 'verify' ? 'Verify Current PIN' : 
-                         dialogStep === 'captcha' ? 'Reset Confirmation' : 
-                         'Security PIN Setup'}
-                      </h4>
-                      <p className={`text-xs transition-colors ${isError ? 'text-muted-orange font-bold animate-pulse' : 'text-stone-500'}`}>
-                        {isError 
-                          ? (dialogStep === 'verify' ? 'Incorrect PIN!' : dialogStep === 'captcha' ? 'Verification Failed!' : 'PINs do not match!') 
-                          : (dialogStep === 'verify' ? 'Authorization required' : dialogStep === 'captcha' ? 'Final identity check' : 'Secure your inventory system')
-                        }
-                      </p>
-                    </div>
-                  </div>
-                  <button 
-                    onClick={() => setShowPinDialog(false)} 
-                    className="p-2 text-stone-400 hover:text-muted-orange hover:bg-red-50 rounded-xl transition-all"
-                  >
-                    <X size={20} />
-                  </button>
-                </div>
-
-                {dialogStep === 'verify' ? (
-                  <form onSubmit={handleVerify} className="space-y-5">
-                    <p className="text-sm text-stone-600 leading-relaxed">
-                      Please enter your current security PIN to continue.
-                    </p>
-                    <div className="py-2">
-                       <input 
-                        autoFocus
-                        type="password" 
-                        pattern="[0-9]*" 
-                        inputMode="numeric"
-                        maxLength="6"
-                        placeholder="••••••"
-                        value={verifyInput}
-                        onChange={e => setVerifyInput(e.target.value.replace(/\D/g,''))}
-                        className={`w-full text-center text-2xl tracking-[0.3em] p-4 border-2 rounded-xl transition-all focus:outline-none shadow-sm ${
-                          isError 
-                          ? 'border-muted-orange bg-red-50' 
-                          : 'border-stone-100 bg-stone-50 focus:border-sage focus:bg-white focus:ring-4 focus:ring-sage/10'
-                        }`}
-                      />
-                    </div>
-                    <div className="pt-4">
-                      <button 
-                        type="submit" 
-                        className={`w-full py-4 rounded-xl font-bold active:scale-[0.98] transition-all shadow-lg uppercase tracking-widest text-sm ${
-                          isError ? 'bg-muted-orange text-white' : 'bg-deep-charcoal text-white hover:bg-opacity-90'
-                        }`}
-                      >
-                        {isError ? 'TRY AGAIN' : 'VERIFY AUTHORIZATION'}
-                      </button>
-                    </div>
-                  </form>
-                ) : dialogStep === 'captcha' ? (
-                  <form onSubmit={(e) => {
-                    e.preventDefault();
-                    if (captchaInput.toUpperCase() === captchaCode) {
-                      handleResetSystem();
-                      setShowPinDialog(false);
-                      setDialogStep('setup');
-                    } else {
-                      setIsError(true);
-                      setCaptchaInput('');
-                      generateCaptcha();
-                      setTimeout(() => setIsError(false), 600);
-                    }
-                  }} className="space-y-5">
-                    <p className="text-sm text-stone-600 leading-relaxed">
-                      To prevent accidental data loss, please type the characters shown below.
-                    </p>
-                    
-                    <div className="space-y-6 py-2">
-                      <div className="flex flex-col items-center gap-3">
-                        <div className="bg-dirty-white px-8 py-4 rounded-xl border-2 border-dashed border-stone-200 select-none">
-                          <span className="text-3xl font-black tracking-[0.4em] text-deep-charcoal italic">{captchaCode}</span>
-                        </div>
-                        
-                        <input 
-                          autoFocus
-                          type="text" 
-                          placeholder="••••••"
-                          value={captchaInput}
-                          onChange={e => setCaptchaInput(e.target.value)}
-                          className={`w-full text-center text-2xl tracking-[0.2em] p-4 border-2 rounded-xl transition-all focus:outline-none shadow-sm uppercase ${
-                            isError 
-                            ? 'border-muted-orange bg-red-50' 
-                            : 'border-stone-100 bg-stone-50 focus:border-sage focus:bg-white focus:ring-4 focus:ring-sage/10'
-                          }`}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-4">
-                      <button 
-                        type="submit" 
-                        disabled={captchaInput.length < 6 || isError}
-                        className={`w-full py-4 rounded-xl font-bold active:scale-[0.98] transition-all shadow-lg uppercase tracking-widest text-sm ${
-                          isError ? 'bg-muted-orange text-white' : 'bg-deep-charcoal text-white hover:bg-opacity-90'
-                        }`}
-                      >
-                        {isError ? 'TRY AGAIN' : 'PROCEED WITH RESET'}
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <form onSubmit={handleSavePin} className="space-y-5">
-                    <p className="text-sm text-stone-600 leading-relaxed">
-                      Set a 4-6 digit numeric PIN. This will be required to unlock the system and manage sensitive sections.
-                    </p>
-                    
-                    <div className="space-y-4 py-2">
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-stone-400 uppercase tracking-widest ml-1">Create New PIN</label>
-                        <input 
-                          autoFocus
-                          type="password" 
-                          pattern="[0-9]*" 
-                          inputMode="numeric"
-                          maxLength="6"
-                          placeholder="••••••"
-                          value={tempPin}
-                          onChange={e => setTempPin(e.target.value.replace(/\D/g,''))}
-                          className={`w-full text-center text-2xl tracking-[0.3em] p-4 border-2 rounded-xl transition-all focus:outline-none shadow-sm ${
-                            isError 
-                            ? 'border-muted-orange bg-red-50 animate-pulse' 
-                            : 'border-stone-100 bg-stone-50 focus:border-sage focus:bg-white focus:ring-4 focus:ring-sage/10'
-                          }`}
-                        />
-                      </div>
-                      
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-bold text-stone-400 uppercase tracking-widest ml-1">Confirm PIN</label>
-                        <input 
-                          type="password" 
-                          pattern="[0-9]*" 
-                          inputMode="numeric"
-                          maxLength="6"
-                          placeholder="••••••"
-                          value={confirmPin}
-                          onChange={e => setConfirmPin(e.target.value.replace(/\D/g,''))}
-                          className={`w-full text-center text-2xl tracking-[0.3em] p-4 border-2 rounded-xl transition-all focus:outline-none shadow-sm ${
-                            isError 
-                            ? 'border-muted-orange bg-red-50 animate-pulse' 
-                            : 'border-stone-100 bg-stone-50 focus:border-sage focus:bg-white focus:ring-4 focus:ring-sage/10'
-                          }`}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-4">
-                      <button 
-                        type="submit" 
-                        disabled={tempPin.length < 4 || confirmPin.length < 4 || isError}
-                        className={`w-full py-4 rounded-xl font-bold active:scale-[0.98] transition-all shadow-lg uppercase tracking-widest text-sm ${
-                          isError 
-                          ? 'bg-muted-orange text-white' 
-                          : 'bg-deep-charcoal text-white hover:bg-opacity-90 disabled:opacity-30 disabled:cursor-not-allowed'
-                        }`}
-                      >
-                        {isError ? 'TRY AGAIN' : 'Save Secure PIN'}
-                      </button>
-                    </div>
-                  </form>
-                )}
-                <button 
-                  type="button"
-                  onClick={() => setShowPinDialog(false)}
-                  className="w-full mt-2 py-3 text-stone-400 font-medium text-sm hover:text-stone-600 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+        {/* Data Management Card */}
+        <div className="bg-white border border-stone-200 rounded-3xl p-8 flex flex-col items-start hover:border-sage transition-all shadow-sm group">
+          <div className="p-3 bg-dirty-white rounded-2xl mb-4 group-hover:bg-sage/10 transition-colors">
+            <Database size={24} className="text-stone-500 group-hover:text-sage" />
+          </div>
+          <h3 className="font-black text-xl mb-2 italic uppercase">Data Management</h3>
+          <p className="text-stone-500 text-sm mb-8 flex-1 leading-relaxed">
+            Backup your local inventory or clear all records. Recommended before major stock updates.
+          </p>
+          <div className="flex gap-3 w-full">
+            <button 
+              onClick={handleExport}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-dirty-white text-deep-charcoal rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-stone-200 transition-all"
+            >
+              <Download size={16} /> Export
+            </button>
+            <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-dirty-white text-deep-charcoal rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-stone-200 transition-all cursor-pointer">
+              <Upload size={16} /> Import
+              <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+            </label>
+            <button 
+              onClick={() => setShowDeleteModal(true)}
+              className="p-3 bg-red-50 text-muted-orange rounded-xl hover:bg-red-100 transition-all"
+              title="Reset Account Data"
+            >
+              <Trash2 size={20} />
+            </button>
+          </div>
         </div>
 
         <SettingCard 
           icon={<Languages size={20} className="text-stone-500" />}
-          title="Language & Region"
-          description="Set your preferred language and regional formats."
-          disabled
+          title="Regional Settings"
+          description={`Currency: ${settings.currency} • Format: ${settings.dateFormat}`}
+          actionText="Manage Settings"
+          onClick={() => setShowRegionalModal(true)}
         />
-        <div className="bg-white border border-stone-200 rounded-lg p-6 flex flex-col items-start hover:border-sage transition-colors shadow-sm relative overflow-hidden group">
-          <div className="p-2 bg-dirty-white rounded-lg mb-3">
-            <Database size={20} className="text-stone-500" />
-          </div>
-          <h3 className="font-bold text-lg mb-1">Data Backup</h3>
-          <p className="text-stone-500 text-sm mb-6 flex-1">
-            Export or import your inventory and sales data.
-          </p>
-          <button 
-            onClick={() => setShowBackupModal(true)}
-            className="w-full px-4 py-2.5 border border-stone-200 text-stone-600 rounded font-medium text-sm hover:bg-dirty-white transition-all shadow-sm"
-          >
-            Manage Data Tools
-          </button>
-        </div>
-        <div className="bg-white border border-stone-200 rounded-lg p-6 flex flex-col items-start hover:border-muted-orange transition-colors shadow-sm relative overflow-hidden group">
-          <div className="p-2 bg-dirty-white rounded-lg mb-3 group-hover:bg-red-50 transition-colors">
-            <Trash2 size={20} className="text-stone-500 group-hover:text-muted-orange" />
-          </div>
-          <h3 className="font-bold text-lg mb-1">Reset System</h3>
-          <p className="text-stone-500 text-sm mb-6 flex-1">
-            Permanently delete all products and clear all transaction history.
-          </p>
-          <button 
-            onClick={() => {
-              if (securityPin) startPinAction('reset');
-              else {
-                generateCaptcha();
-                setDialogStep('captcha');
-                setShowPinDialog(true);
-              }
-            }}
-            className="w-full px-4 py-2.5 border border-stone-200 text-stone-600 rounded font-medium text-sm hover:bg-muted-orange hover:text-white hover:border-muted-orange transition-all shadow-sm"
-          >
-            Reset System
-          </button>
-        </div>
+        
+        <SettingCard 
+          icon={<PaintBucket size={20} className="text-stone-500" />}
+          title="Personalization"
+          description={`Theme: ${settings.theme === 'light' ? 'Daylight' : 'Night'} • Accent: ${settings.accent} (Coming Soon)`}
+          actionText="Coming Soon"
+          disabled={true}
+          onClick={() => setShowPersonalizationModal(true)}
+        />
+      </div>
 
-        {/* Backup Modal Overlay */}
-        {showBackupModal && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-            <div 
-              className="absolute inset-0 bg-stone-900/10 backdrop-blur-md animate-in fade-in" 
-              onClick={() => setShowBackupModal(false)}
-            />
-            <div className="relative bg-white/90 backdrop-blur-xl w-full max-w-sm rounded-[2rem] shadow-[0_32px_64px_rgba(0,0,0,0.1)] border border-white/50 p-10 animate-in zoom-in-95 duration-300 text-center">
-              <div className="p-4 bg-dirty-white rounded-2xl w-fit mx-auto mb-6">
-                <Database size={28} className="text-stone-500" />
-              </div>
-              <h3 className="text-xl font-black text-deep-charcoal tracking-tight mb-2">Data Management</h3>
-              <p className="text-stone-400 text-xs uppercase tracking-[0.15em] mb-10 leading-relaxed font-bold">
-                Export or import your system database
-              </p>
-              
-              <div className="space-y-4">
-                <button 
-                  onClick={() => {
-                    handleExport();
-                    setShowBackupModal(false);
-                  }}
-                  className="w-full py-4 bg-deep-charcoal text-white rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-opacity-90 transition-all shadow-lg"
-                >
-                  Export Data JSON
-                </button>
-                
-                <div className="relative">
-                  <input 
-                    type="file" 
-                    accept=".json" 
-                    onChange={(e) => {
-                      handleImport(e);
-                      setShowBackupModal(false);
-                    }}
-                    className="absolute inset-0 opacity-0 cursor-pointer z-10" 
-                  />
-                  <button 
-                    className="w-full py-4 bg-white border-2 border-stone-100 text-stone-600 rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-dirty-white transition-all shadow-sm"
-                  >
-                    Import From File
-                  </button>
+      {/* Regional Settings Modal */}
+      {showRegionalModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm" onClick={() => setShowRegionalModal(false)} />
+          <div className="relative bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-10">
+            <div className="flex justify-between items-center mb-8">
+                <h4 className="text-xl font-black uppercase italic">Regional Settings</h4>
+                <button onClick={() => setShowRegionalModal(false)} className="p-2 hover:bg-dirty-white rounded-full transition-colors"><X size={20}/></button>
+            </div>
+            <div className="space-y-6">
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-stone-400">System Currency</label>
+                    <div className="grid grid-cols-4 gap-2">
+                        {['₱', '$', '€', '¥'].map(c => (
+                            <button key={c} onClick={() => updateSetting('currency', c)} className={`py-4 rounded-xl font-black transition-all ${settings.currency === c ? 'bg-sage text-white shadow-md' : 'bg-dirty-white text-stone-500 hover:bg-stone-100'}`}>
+                                {c}
+                            </button>
+                        ))}
+                    </div>
                 </div>
-
-                <button 
-                  onClick={() => setShowBackupModal(false)}
-                  className="w-full mt-4 py-2 text-stone-400 text-[10px] font-bold uppercase tracking-[0.2em] hover:text-stone-600 transition-colors"
-                >
-                  cancel and close
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-stone-400">Date Format</label>
+                    <div className="flex flex-col gap-2">
+                        {[
+                            { label: 'MM/DD/YYYY (US)', val: 'MM/DD/yyyy' },
+                            { label: 'DD/MM/YYYY (EU)', val: 'dd/MM/yyyy' },
+                            { label: 'YYYY-MM-DD (ISO)', val: 'yyyy-MM-dd' }
+                        ].map(f => (
+                            <button key={f.val} onClick={() => updateSetting('dateFormat', f.val)} className={`px-4 py-3 rounded-xl font-bold text-sm text-left transition-all ${settings.dateFormat === f.val ? 'bg-deep-charcoal text-white' : 'bg-dirty-white text-stone-500 hover:bg-stone-100'}`}>
+                                {f.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <button onClick={() => setShowRegionalModal(false)} className="w-full py-4 mt-4 bg-sage text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-opacity-90 transition-all">
+                    Save Preferences
                 </button>
-              </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Personalization Modal */}
+      {showPersonalizationModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-stone-900/40 backdrop-blur-sm" onClick={() => setShowPersonalizationModal(false)} />
+          <div className="relative bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-10">
+            <div className="flex justify-between items-center mb-8">
+                <h4 className="text-xl font-black uppercase italic">Appearance</h4>
+                <button onClick={() => setShowPersonalizationModal(false)} className="p-2 hover:bg-dirty-white rounded-full transition-colors"><X size={20}/></button>
+            </div>
+            <div className="space-y-6">
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-stone-400">Interface Theme</label>
+                    <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => updateSetting('theme', 'light')} className={`py-6 rounded-2xl flex flex-col items-center gap-2 transition-all ${settings.theme === 'light' ? 'ring-4 ring-sage/20 bg-dirty-white border-2 border-sage' : 'bg-dirty-white border-2 border-transparent opacity-60'}`}>
+                            <div className="w-10 h-10 bg-white rounded-lg border border-stone-200"></div>
+                            <span className="text-[10px] font-black uppercase">Standard</span>
+                        </button>
+                        <button onClick={() => updateSetting('theme', 'dark')} className={`py-6 rounded-2xl flex flex-col items-center gap-2 transition-all opacity-40 cursor-not-allowed`}>
+                            <div className="w-10 h-10 bg-deep-charcoal rounded-lg border border-stone-700"></div>
+                            <span className="text-[10px] font-black uppercase">Night (Coming Soon)</span>
+                        </button>
+                    </div>
+                </div>
+                <div className="space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-stone-400">Accent Color</label>
+                    <div className="grid grid-cols-5 gap-3">
+                        {[
+                            { name: 'sage', color: 'bg-sage' },
+                            { name: 'rose', color: 'bg-rose-400' },
+                            { name: 'amber', color: 'bg-amber-400' },
+                            { name: 'blue', color: 'bg-blue-400' },
+                            { name: 'slate', color: 'bg-stone-500' }
+                        ].map(c => (
+                            <button 
+                                key={c.name} 
+                                onClick={() => updateSetting('accent', c.name)}
+                                className={`h-10 rounded-full ${c.color} transition-all transform hover:scale-110 flex items-center justify-center ${settings.accent === c.name ? 'ring-4 ring-offset-2 ring-stone-900 shadow-xl' : 'opacity-80'}`}
+                            >
+                                {settings.accent === c.name && <div className="w-2 h-2 bg-white rounded-full"></div>}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <button onClick={() => setShowPersonalizationModal(false)} className="w-full py-4 mt-4 bg-deep-charcoal text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-opacity-90 transition-all">
+                    Apply Layout
+                </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Extreme Verification Delete Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-stone-900/60 backdrop-blur-md" onClick={() => !isDeleting && setShowDeleteModal(false)} />
+          
+          <div className="relative bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-10 transform scale-100 transition-transform">
+            <div className="flex flex-col items-center text-center mb-8">
+              <div className="p-4 bg-red-50 text-muted-orange rounded-3xl mb-4 animate-pulse">
+                <AlertTriangle size={32} />
+              </div>
+              <h4 className="text-2xl font-black text-deep-charcoal italic uppercase tracking-tight">Extreme Verification</h4>
+              <p className="text-stone-500 text-xs font-bold uppercase tracking-widest mt-2 leading-relaxed">
+                You are about to wipe all data for:<br/>
+                <span className="text-muted-orange">{userEmail}</span>
+              </p>
+            </div>
+
+            <form onSubmit={handleDeleteData} className="space-y-6">
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-stone-400 ml-4">Type Email to Verify</label>
+                  <input
+                    type="email"
+                    placeholder={userEmail}
+                    value={confirmEmail}
+                    onChange={e => setConfirmEmail(e.target.value)}
+                    className="w-full p-4 bg-dirty-white border-2 border-transparent rounded-2xl focus:outline-none focus:border-muted-orange text-xs font-bold transition-all shadow-inner"
+                    required
+                    disabled={isDeleting}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black uppercase tracking-[0.2em] text-stone-400 ml-4">Enter Security PIN</label>
+                  <input
+                    type="password"
+                    placeholder="••••••"
+                    value={confirmPin}
+                    onChange={e => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+                    className="w-full p-4 bg-dirty-white border-2 border-transparent rounded-2xl focus:outline-none focus:border-muted-orange text-xs font-bold transition-all shadow-inner text-center tracking-[0.5em]"
+                    maxLength="6"
+                    required
+                    disabled={isDeleting}
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <p className="text-muted-orange text-[9px] font-black uppercase tracking-widest text-center animate-shake">
+                  {error}
+                </p>
+              )}
+
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(false)}
+                  disabled={isDeleting}
+                  className="flex-1 py-4 bg-stone-100 text-stone-500 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-stone-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isDeleting || !confirmEmail || !confirmPin}
+                  className={`flex-[2] py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2 ${
+                    isDeleting ? 'bg-stone-400 text-white' : 'bg-muted-orange text-white hover:bg-opacity-90'
+                  }`}
+                >
+                  {isDeleting ? (
+                    <>
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Wiping Database...
+                    </>
+                  ) : (
+                    "WIPE DATA"
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function SettingCard({ icon, title, description, actionText = "Coming Soon", disabled = false }) {
+function SettingCard({ icon, title, description, actionText, onClick, disabled }) {
   return (
-    <div className={`bg-white border border-stone-200 rounded-lg p-5 flex flex-col items-start hover:border-sage transition-colors shadow-sm ${disabled ? 'opacity-70' : ''}`}>
-      <div className="p-2 bg-dirty-white rounded-lg mb-3">
+    <div className={`relative bg-white border border-stone-200 rounded-3xl p-8 flex flex-col items-start transition-all shadow-sm ${disabled ? 'opacity-70' : 'hover:border-sage hover:shadow-xl'}`}>
+      {disabled && (
+        <div className="absolute top-6 right-6 px-3 py-1 bg-dirty-white border border-stone-200 rounded-full">
+          <span className="text-[8px] font-black uppercase tracking-[0.2em] text-stone-400">Coming Soon</span>
+        </div>
+      )}
+      <div className={`p-3 rounded-2xl mb-4 transition-colors ${disabled ? 'bg-dirty-white grayscale' : 'bg-dirty-white group-hover:bg-sage/10'}`}>
         {icon}
       </div>
-      <h3 className="font-bold text-lg mb-1">{title}</h3>
-      <p className="text-stone-500 text-sm mb-4 flex-1">{description}</p>
-      <button className="px-4 py-2 border border-stone-200 rounded font-medium text-sm text-stone-600 hover:bg-dirty-white transition-colors disabled:cursor-not-allowed" disabled={disabled}>
+      <h3 className={`font-black text-xl mb-2 italic uppercase ${disabled ? 'text-stone-400' : 'text-deep-charcoal'}`}>{title}</h3>
+      <p className="text-stone-500 text-sm mb-8 flex-1 leading-relaxed">{description}</p>
+      <button 
+        onClick={onClick}
+        disabled={disabled}
+        className={`w-full py-4 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${
+          disabled 
+          ? 'bg-stone-50 text-stone-300 cursor-not-allowed' 
+          : 'bg-dirty-white text-deep-charcoal hover:bg-stone-200 active:scale-95'
+        }`}
+      >
         {actionText}
       </button>
     </div>
   );
 }
+

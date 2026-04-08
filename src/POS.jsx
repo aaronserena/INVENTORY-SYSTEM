@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { ShoppingCart, Search, CheckCircle, Printer, LayoutGrid, List, Zap, ChevronDown, ChevronUp, MonitorOff, Tag } from 'lucide-react';
-import { CATEGORIES } from './Products';
+import { getCategoryIcon } from './Products';
 
-export default function POS({ products, setProducts, setSalesLogs }) {
+export default function POS({ products, setProducts, salesLogs, setSalesLogs, userEmail, settings }) {
   const [cart, setCart] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -14,13 +14,15 @@ export default function POS({ products, setProducts, setSalesLogs }) {
   const [sortMode, setSortMode] = useState('date');
   const [isTooSmall, setIsTooSmall] = useState(window.innerWidth < 768);
 
+  const activeCategories = useMemo(() => {
+    return [...new Set(products.map(p => p.category))].filter(Boolean).sort();
+  }, [products]);
+
   useEffect(() => {
     const handleResize = () => setIsTooSmall(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
-
-  // No hover/touch delays needed — expansion is triggered by click/selection
 
   const filteredProducts = [...products]
     .filter(p => {
@@ -41,7 +43,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
   const addToCart = (product) => {
     const existing = cart.find(item => item.productId === product.id);
     if (existing) {
-      if (existing.quantity >= product.currentQty) return; // Cannot add more than stock
+      if (existing.quantity >= product.currentQty) return;
       setCart(cart.map(item => item.productId === product.id ? { ...item, quantity: item.quantity + 1 } : item));
     } else {
       setCart([...cart, { productId: product.id, name: product.name, price: product.sellingPrice, quantity: 1 }]);
@@ -64,14 +66,13 @@ export default function POS({ products, setProducts, setSalesLogs }) {
 
   const handleCheckout = () => {
     if (cart.length === 0) return;
-    if (Number(clientMoney) < cartTotal) {
-      alert("Client money is insufficient.");
+    if (clientMoney === '' || Number(clientMoney) < cartTotal) {
+      alert("Insufficient client money.");
       return;
     }
 
     const timestamp = new Date().toISOString();
     
-    // Update Inventory
     const updatedProducts = products.map(p => {
       const cartItem = cart.find(item => item.productId === p.id);
       if (cartItem) {
@@ -80,7 +81,6 @@ export default function POS({ products, setProducts, setSalesLogs }) {
       return p;
     });
 
-    // Generate Logs
     const newLogs = cart.map(item => ({
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
       productId: item.productId,
@@ -95,71 +95,74 @@ export default function POS({ products, setProducts, setSalesLogs }) {
     if (shouldPrint) {
       printReceipt(newLogs, timestamp);
     }
-    
+
     setCart([]);
     setClientMoney('');
+    alert("Transaction Successful!");
   };
 
   const printReceipt = (logs, timestamp) => {
-    const itemsHtml = cart.map(item => `
-      <div style="display:flex; justify-content:space-between;">
-        <span>${item.name} x${item.quantity}</span>
-        <span>₱${(item.price * item.quantity).toFixed(2)}</span>
-      </div>
-    `).join('');
+    const itemsHtml = logs.map(log => {
+      const product = products.find(p => p.id === log.productId);
+      return `
+        <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 12px;">
+          <span>${product?.name || 'Unknown'} x${log.quantity}</span>
+          <span>${settings.currency}${(log.price * log.quantity).toFixed(2)}</span>
+        </div>
+      `;
+    }).join('');
 
     const htmlContent = `
       <html>
         <head>
           <title>Receipt</title>
           <style>
-            body { font-family: monospace; width: 300px; margin: 0 auto; color: #555555; padding: 20px; text-align: left; }
-            .header { text-align: center; border-bottom: 1px dashed #555555; padding-bottom: 10px; margin-bottom: 10px; }
-            .footer { border-top: 1px dashed #555555; padding-top: 10px; margin-top: 10px; }
+            body { font-family: 'Courier New', Courier, monospace; width: 80mm; padding: 10px; color: #333; }
+            .header { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 10px; margin-bottom: 10px; }
+            .footer { text-align: center; border-top: 1px dashed #000; padding-top: 10px; margin-top: 10px; font-size: 10px; }
+            .flex-row { display: flex; justify-content: space-between; }
+            .bold { font-weight: bold; }
           </style>
         </head>
-        <body>
+        <body onload="${isSilentPrint ? 'window.print(); window.close();' : ''}">
           <div class="header">
-            <h2>RECEIPT</h2>
-            <p>${new Date(timestamp).toLocaleString()}</p>
+            <h2 style="margin: 0; font-size: 16px;">INVENTORY SYSTEM</h2>
+            <p style="margin: 5px 0; font-size: 10px;">${new Date(timestamp).toLocaleString()}</p>
           </div>
-          <div>
+          <div style="margin-bottom: 10px;">
             ${itemsHtml}
           </div>
-          <div class="footer" style="display:flex; justify-content:space-between; font-weight: bold; font-size: 1.1em;">
-            <span>TOTAL:</span>
-            <span>₱${cartTotal.toFixed(2)}</span>
+          <div class="flex-row bold" style="font-size: 14px; margin-top: 5px;">
+            <span>TOTAL</span>
+            <span>${settings.currency}${cartTotal.toFixed(2)}</span>
           </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span>CASH:</span>
-            <span>₱${Number(clientMoney).toFixed(2)}</span>
+          <div class="flex-row" style="font-size: 12px;">
+            <span>CASH</span>
+            <span>${settings.currency}${Number(clientMoney).toFixed(2)}</span>
           </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span>CHANGE:</span>
-            <span>₱${change.toFixed(2)}</span>
+          <div class="flex-row bold" style="font-size: 14px; border-top: 1px solid #000; margin-top: 5px; padding-top: 5px;">
+            <span>CHANGE</span>
+            <span>${settings.currency}${change.toFixed(2)}</span>
           </div>
-          <div style="text-align: center; margin-top: 20px;">Thank you!</div>
+          <div class="footer">
+            <p>Thank you for your purchase!</p>
+            <p>Support: support@example.com</p>
+          </div>
         </body>
       </html>
     `;
 
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    
     if (isSilentPrint) {
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      document.body.appendChild(iframe);
-      iframe.contentWindow.document.write(htmlContent);
-      iframe.contentWindow.document.close();
-      
-      iframe.onload = () => {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-        setTimeout(() => document.body.removeChild(iframe), 2000);
+      printWindow.onload = () => {
+        printWindow.print();
+        printWindow.close();
       };
     } else {
-      const printWindow = window.open('', '_blank');
-      printWindow.document.write(htmlContent);
-      printWindow.document.close();
-      setTimeout(() => printWindow.print(), 250);
+        // Just let it open
     }
   };
 
@@ -200,68 +203,31 @@ export default function POS({ products, setProducts, setSalesLogs }) {
             />
           </div>
           
-          <div className="flex items-stretch gap-2 pb-1">
+          <div className="flex items-center gap-2 pb-1 overflow-x-auto scrollbar-hide no-print">
             {/* All Items */}
             <button
               onClick={() => setSelectedCategory('All')}
-              style={{
-                flexShrink: 0,
-                flexGrow: selectedCategory === 'All' ? 2 : 1,
-                transition: 'flex-grow 0.4s cubic-bezier(0.4,0,0.2,1), background-color 0.3s, box-shadow 0.3s',
-              }}
-              className={`p-3 rounded-xl border flex items-center justify-center gap-2 overflow-hidden ${
+              className={`px-6 py-3 rounded-xl border flex items-center justify-center gap-2 whitespace-nowrap transition-all ${
                 selectedCategory === 'All'
-                  ? 'bg-deep-charcoal text-white border-transparent shadow-lg'
+                  ? 'bg-deep-charcoal text-white border-transparent shadow-lg scale-105'
                   : 'bg-white text-stone-accent border-stone-200 hover:bg-dirty-white'
               }`}
             >
-              <LayoutGrid size={20} className="shrink-0" />
-              <span
-                style={{
-                  maxWidth: selectedCategory === 'All' ? '200px' : '0px',
-                  opacity: selectedCategory === 'All' ? 1 : 0,
-                  transition: 'max-width 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease',
-                  overflow: 'hidden',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-block',
-                }}
-                className="text-[10px] font-black uppercase tracking-widest"
-              >
-                All Items
-              </span>
+              <LayoutGrid size={18} className="shrink-0" />
+              <span className="text-[10px] font-black uppercase tracking-widest">All Items</span>
             </button>
 
-            {CATEGORIES.map(cat => (
+            {activeCategories.map(catName => (
               <button
-                key={cat.name}
-                onClick={() => setSelectedCategory(cat.name)}
-                style={{
-                  flexShrink: 0,
-                  flexGrow: selectedCategory === cat.name ? 2 : 1,
-                  transition: 'flex-grow 0.4s cubic-bezier(0.4,0,0.2,1), background-color 0.3s, box-shadow 0.3s',
-                }}
-                className={`p-3 rounded-xl border flex items-center justify-center gap-2 overflow-hidden ${
-                  selectedCategory === cat.name
-                    ? 'bg-sage text-white border-transparent shadow-lg'
+                key={catName}
+                onClick={() => setSelectedCategory(catName)}
+                className={`px-6 py-3 rounded-xl border flex items-center justify-center gap-2 whitespace-nowrap transition-all ${
+                  selectedCategory === catName
+                    ? 'bg-sage text-white border-transparent shadow-lg scale-105'
                     : 'bg-white text-stone-accent border-stone-200 hover:bg-dirty-white'
                 }`}
               >
-                <div className="shrink-0">
-                  {cat.icon}
-                </div>
-                <span
-                  style={{
-                    maxWidth: selectedCategory === cat.name ? '200px' : '0px',
-                    opacity: selectedCategory === cat.name ? 1 : 0,
-                    transition: 'max-width 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease',
-                    overflow: 'hidden',
-                    whiteSpace: 'nowrap',
-                    display: 'inline-block',
-                  }}
-                  className="text-[10px] font-black uppercase tracking-widest"
-                >
-                  {cat.name}
-                </span>
+                <span className="text-[10px] font-black uppercase tracking-widest">{catName}</span>
               </button>
             ))}
           </div>
@@ -292,7 +258,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
             </select>
           </div>
         </div>
-        <div className={`flex-1 overflow-auto p-4 gap-4 content-start ${viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4' : 'flex flex-col'}`}>
+        <div className={`flex-1 overflow-auto p-4 gap-4 content-start ${viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 3xl:grid-cols-8' : 'flex flex-col'}`}>
           {filteredProducts.map(product => (
             <button 
               key={product.id}
@@ -306,7 +272,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
               {viewMode === 'grid' ? (
                 <>
                   <span className="font-bold text-center block mb-2">{product.name}</span>
-                  <span className="text-sage font-bold block">₱{product.sellingPrice.toFixed(2)}</span>
+                  <span className="text-sage font-bold block">{settings.currency}{product.sellingPrice.toFixed(2)}</span>
                   <span className="text-xs text-stone-accent block mt-1">Stock: {product.currentQty}</span>
                 </>
               ) : (
@@ -314,7 +280,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
                   <span className="font-bold">{product.name}</span>
                   <div className="text-right flex items-center gap-4">
                     <span className="text-xs text-stone-accent">Stock: {product.currentQty}</span>
-                    <span className="text-sage font-bold min-w-[5rem] text-right">₱{product.sellingPrice.toFixed(2)}</span>
+                    <span className="text-sage font-bold min-w-[5rem] text-right">{settings.currency}{product.sellingPrice.toFixed(2)}</span>
                   </div>
                 </>
               )}
@@ -327,7 +293,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
       </div>
 
       {/* POS Cart / Calculator Area */}
-      <div className="w-full md:w-80 lg:w-96 bg-white border border-stone-200 rounded-lg flex flex-col shadow-sm">
+      <div className="w-full md:w-64 lg:w-80 xl:w-96 bg-white border border-stone-200 rounded-lg flex flex-col shadow-sm shrink-0">
         <div className="p-4 border-b border-stone-200 flex items-center gap-2 bg-dirty-white font-bold">
           <ShoppingCart size={18} /> Current Order
         </div>
@@ -337,7 +303,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
             <div key={item.productId} className="flex justify-between items-center bg-dirty-white p-3 rounded">
               <div className="flex-1">
                 <div className="font-medium text-sm">{item.name}</div>
-                <div className="text-sage font-bold text-sm">₱{item.price.toFixed(2)}</div>
+                <div className="text-sage font-bold text-sm">{settings.currency}{item.price.toFixed(2)}</div>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => updateQuantity(item.productId, item.quantity - 1)} className="w-6 h-6 flex items-center justify-center bg-white border border-stone-200 rounded text-stone-accent hover:text-deep-charcoal">-</button>
@@ -354,11 +320,11 @@ export default function POS({ products, setProducts, setSalesLogs }) {
         <div className="p-4 border-t border-stone-200 bg-dirty-white space-y-4">
           <div className="flex justify-between items-center text-lg">
             <span className="font-bold">Total</span>
-            <span className="font-bold text-deep-charcoal">₱{cartTotal.toFixed(2)}</span>
+            <span className="font-bold text-deep-charcoal">{settings.currency}{cartTotal.toFixed(2)}</span>
           </div>
           
           <div>
-            <label className="block text-sm font-bold mb-1">Client Money (₱)</label>
+            <label className="block text-sm font-bold mb-1">Client Money ({settings.currency})</label>
             <input 
               type="number" 
               value={clientMoney}
@@ -373,7 +339,7 @@ export default function POS({ products, setProducts, setSalesLogs }) {
           <div className="flex justify-between items-center text-lg">
             <span className="font-bold text-stone-accent">Change</span>
             <span className={`font-bold ${change >= 0 ? 'text-sage' : 'text-muted-orange'}`}>
-              ₱{(change || 0).toFixed(2)}
+              {settings.currency}{(change || 0).toFixed(2)}
             </span>
           </div>
 
