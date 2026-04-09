@@ -38,7 +38,7 @@ export default function Products({ products, setProducts, salesLogs, settings })
       setProducts(products.map(p => p.id === editingId ? { ...p, ...form, sellingPrice: Number(form.sellingPrice), costPrice: Number(form.costPrice), currentQty: Number(form.currentQty) } : p));
       setEditingId(null);
     } else {
-      setProducts([...products, { id: Date.now().toString(), ...form, sellingPrice: Number(form.sellingPrice), costPrice: Number(form.costPrice), currentQty: Number(form.currentQty) }]);
+      setProducts([...products, { id: crypto.randomUUID(), ...form, sellingPrice: Number(form.sellingPrice), costPrice: Number(form.costPrice), currentQty: Number(form.currentQty) }]);
       setIsAdding(false);
     }
     setForm({ name: '', category: '', sellingPrice: '', costPrice: '', currentQty: '' });

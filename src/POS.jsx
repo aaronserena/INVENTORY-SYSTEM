@@ -82,7 +82,7 @@ export default function POS({ products, setProducts, salesLogs, setSalesLogs, us
     });
 
     const newLogs = cart.map(item => ({
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      id: crypto.randomUUID(),
       productId: item.productId,
       quantity: item.quantity,
       price: item.price,
