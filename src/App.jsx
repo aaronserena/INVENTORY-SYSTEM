@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { LayoutDashboard, Package, Calculator, ClipboardList, Settings as SettingsIcon, Menu, Lock, Mail, X, Maximize, Minimize, Power } from 'lucide-react';
 import Logo from './assets/logo.png';
 import Dashboard from './Dashboard';
@@ -6,79 +6,106 @@ import Products from './Products';
 import POS from './POS';
 import Transactions from './Transactions';
 import Settings from './Settings';
+import { findUser, emailExists, createUser, getSettings, saveSettings, getProducts, syncProducts, getSalesLogs, insertSalesLogs, deleteSalesLogs, deleteAllProducts } from './lib/db';
 
+// ─── Session helpers (keeps the current user across page refreshes) ───────────
+const SESSION_KEY = 'inv_session_v3';
+function loadSession() {
+  try { return JSON.parse(localStorage.getItem(SESSION_KEY)); } catch { return null; }
+}
+function persistSession(user) {
+  if (user) localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+  else localStorage.removeItem(SESSION_KEY);
+}
 
 function App() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  // User Registry and Auth state
-  const [users, setUsers] = useState(() => {
-    const saved = localStorage.getItem('inv_users');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [activeUser, setActiveUser] = useState(localStorage.getItem('inv_active_user') || null);
+  // sessionUser = { id, email, pin } — stays in localStorage for this device
+  const [sessionUser, setSessionUser] = useState(loadSession);
+  const activeUser = sessionUser?.email || null;
+  const userId = sessionUser?.id || null;
+
   const [isQuickLocked, setIsQuickLocked] = useState(false);
-  const [isSystemLocked, setIsSystemLocked] = useState(!localStorage.getItem('inv_active_user'));
+  const [isSystemLocked, setIsSystemLocked] = useState(!loadSession());
   const [isProductsUnlocked, setIsProductsUnlocked] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const [settings, setSettings] = useState(() => {
-    const user = localStorage.getItem('inv_active_user');
-    if (!user) return { currency: '₱', dateFormat: 'MM/DD/yyyy', theme: 'light', accent: 'sage' };
-    const saved = localStorage.getItem(`inv_settings_${user}`);
-    return saved ? JSON.parse(saved) : { currency: '₱', dateFormat: 'MM/DD/yyyy', theme: 'light', accent: 'sage' };
-  });
+  const [settings, setSettings] = useState({ currency: '₱', dateFormat: 'MM/DD/yyyy', theme: 'light', accent: 'sage' });
+  const [products, setProducts] = useState([]);
+  const [salesLogs, setSalesLogs] = useState([]);
 
+  // Refs used to track previous values for surgical DB syncing
+  const prevProductsRef = useRef([]);
+  const syncedLogsCountRef = useRef(0);
+
+  // ── On mount: if we have a saved session, reload data from DB ─────────────────
   useEffect(() => {
-    if (activeUser) {
-      localStorage.setItem(`inv_settings_${activeUser}`, JSON.stringify(settings));
+    if (sessionUser) {
+      loadUserData(sessionUser.id);
     }
-  }, [settings, activeUser]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Sync users to storage
-  useEffect(() => {
-    localStorage.setItem('inv_users', JSON.stringify(users));
-  }, [users]);
-
-  // Initialize data based on active user
-  const [products, setProducts] = useState(() => {
-    if (!activeUser) return [];
-    const saved = localStorage.getItem(`inv_products_${activeUser}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  const [salesLogs, setSalesLogs] = useState(() => {
-    if (!activeUser) return [];
-    const saved = localStorage.getItem(`inv_sales_logs_${activeUser}`);
-    return saved ? JSON.parse(saved) : [];
-  });
-
-  // Sync data to localStorage scoped by user
-  useEffect(() => {
-    if (activeUser) {
-      localStorage.setItem(`inv_products_${activeUser}`, JSON.stringify(products));
+  async function loadUserData(uid) {
+    setIsLoading(true);
+    try {
+      const [prods, logs, sets] = await Promise.all([
+        getProducts(uid),
+        getSalesLogs(uid),
+        getSettings(uid),
+      ]);
+      setProducts(prods);
+      setSalesLogs(logs);
+      setSettings(sets);
+      prevProductsRef.current = prods;
+      syncedLogsCountRef.current = logs.length;
+    } catch (err) {
+      console.error('Failed to load user data from DB:', err);
+    } finally {
+      setIsLoading(false);
     }
-  }, [products, activeUser]);
+  }
 
+  // ── Sync settings to DB on change ─────────────────────────────────────────────
   useEffect(() => {
-    if (activeUser) {
-      localStorage.setItem(`inv_sales_logs_${activeUser}`, JSON.stringify(salesLogs));
+    if (userId) {
+      saveSettings(userId, settings).catch(console.error);
     }
-  }, [salesLogs, activeUser]);
+  }, [settings, userId]);
 
-  const handleUnlock = (email) => {
-    setActiveUser(email);
-    localStorage.setItem('inv_active_user', email);
+  // ── Sync products to DB on change (surgical: only changed/deleted rows) ───────
+  useEffect(() => {
+    if (!userId) return;
+    const prev = prevProductsRef.current;
+    if (JSON.stringify(prev) === JSON.stringify(products)) return; // no change
+    syncProducts(products, prev, userId).catch(console.error);
+    prevProductsRef.current = products;
+  }, [products, userId]);
 
-    // Load that specific user's data
-    const savedProducts = localStorage.getItem(`inv_products_${email}`);
-    const savedLogs = localStorage.getItem(`inv_sales_logs_${email}`);
-    const savedSettings = localStorage.getItem(`inv_settings_${email}`);
-    setProducts(savedProducts ? JSON.parse(savedProducts) : []);
-    setSalesLogs(savedLogs ? JSON.parse(savedLogs) : []);
-    setSettings(savedSettings ? JSON.parse(savedSettings) : { currency: '₱', dateFormat: 'MM/DD/yyyy', theme: 'light', accent: 'sage' });
+  // ── Sync NEW sales logs to DB (append-only; handles wipe-to-empty from Settings) ─
+  useEffect(() => {
+    if (!userId) return;
+    if (salesLogs.length === 0 && syncedLogsCountRef.current > 0) {
+      // Settings wiped all logs — delete from DB too
+      deleteSalesLogs(userId).catch(console.error);
+      syncedLogsCountRef.current = 0;
+      return;
+    }
+    if (salesLogs.length <= syncedLogsCountRef.current) return;
+    const newLogs = salesLogs.slice(syncedLogsCountRef.current);
+    insertSalesLogs(newLogs, userId).catch(console.error);
+    syncedLogsCountRef.current = salesLogs.length;
+  }, [salesLogs, userId]);
 
+  // ── Handlers ──────────────────────────────────────────────────────────────────
+  const handleUnlock = async (user) => {
+    // user = { id, email, pin }
+    persistSession(user);
+    setSessionUser(user);
+    await loadUserData(user.id);
     setActiveTab('dashboard');
     setIsSystemLocked(false);
   };
@@ -89,39 +116,34 @@ function App() {
   };
 
   const handleSignOut = () => {
-    setActiveUser(null);
-    localStorage.removeItem('inv_active_user');
+    persistSession(null);
+    setSessionUser(null);
     setProducts([]);
     setSalesLogs([]);
     setSettings({ currency: '₱', dateFormat: 'MM/DD/yyyy', theme: 'light', accent: 'sage' });
+    prevProductsRef.current = [];
+    syncedLogsCountRef.current = 0;
     setIsSystemLocked(true);
     setIsProductsUnlocked(false);
   };
 
   useEffect(() => {
-    // When switching away from Products, re-lock it for security
-    if (activeTab !== 'products') {
-      setIsProductsUnlocked(false);
-    }
+    if (activeTab !== 'products') setIsProductsUnlocked(false);
   }, [activeTab]);
 
   // Fullscreen support
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch((err) => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
+      document.documentElement.requestFullscreen().catch(console.error);
     } else {
       document.exitFullscreen();
     }
   };
 
   useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    const handle = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handle);
+    return () => document.removeEventListener('fullscreenchange', handle);
   }, []);
 
   return (
@@ -151,41 +173,11 @@ function App() {
         {/* Sidebar Navigation */}
         <aside className={`${isCollapsed ? 'w-0 lg:w-16' : 'w-16 lg:w-48'} transition-all duration-300 overflow-hidden bg-white border-r border-stone-200 flex flex-col no-print`}>
           <nav className="p-2 flex-1 space-y-1">
-            <NavItem
-              active={activeTab === 'dashboard'}
-              onClick={() => setActiveTab('dashboard')}
-              icon={<LayoutDashboard size={20} />}
-              label="Dashboard"
-              isCollapsed={isCollapsed}
-            />
-            <NavItem
-              active={activeTab === 'products'}
-              onClick={() => setActiveTab('products')}
-              icon={<Package size={20} />}
-              label="Products"
-              isCollapsed={isCollapsed}
-            />
-            <NavItem
-              active={activeTab === 'pos'}
-              onClick={() => setActiveTab('pos')}
-              icon={<Calculator size={20} />}
-              label="POS"
-              isCollapsed={isCollapsed}
-            />
-            <NavItem
-              active={activeTab === 'transactions'}
-              onClick={() => setActiveTab('transactions')}
-              icon={<ClipboardList size={20} />}
-              label="Transactions"
-              isCollapsed={isCollapsed}
-            />
-            <NavItem
-              active={activeTab === 'settings'}
-              onClick={() => setActiveTab('settings')}
-              icon={<SettingsIcon size={20} />}
-              label="Settings"
-              isCollapsed={isCollapsed}
-            />
+            <NavItem active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={20} />} label="Dashboard" isCollapsed={isCollapsed} />
+            <NavItem active={activeTab === 'products'} onClick={() => setActiveTab('products')} icon={<Package size={20} />} label="Products" isCollapsed={isCollapsed} />
+            <NavItem active={activeTab === 'pos'} onClick={() => setActiveTab('pos')} icon={<Calculator size={20} />} label="POS" isCollapsed={isCollapsed} />
+            <NavItem active={activeTab === 'transactions'} onClick={() => setActiveTab('transactions')} icon={<ClipboardList size={20} />} label="Transactions" isCollapsed={isCollapsed} />
+            <NavItem active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<SettingsIcon size={20} />} label="Settings" isCollapsed={isCollapsed} />
           </nav>
 
           <div className="p-2 border-t border-stone-100 mt-auto">
@@ -204,51 +196,60 @@ function App() {
 
         {/* Main Content Area */}
         <main className={`flex-1 overflow-x-hidden p-6 lg:p-12 ${['dashboard', 'pos', 'products'].includes(activeTab) ? 'lg:h-screen lg:overflow-hidden overflow-y-auto' : 'overflow-y-auto'}`}>
-          <div className={`mx-auto h-full ${['dashboard', 'pos', 'products'].includes(activeTab) ? 'w-full' : 'max-w-7xl'}`}>
-            {activeTab === 'dashboard' && (
-              <Dashboard products={products} salesLogs={salesLogs} setSalesLogs={setSalesLogs} settings={settings} />
-            )}
-            {activeTab === 'products' && (
-              <div className="relative h-full">
-                <div className={!isProductsUnlocked ? 'blur-md pointer-events-none' : ''}>
-                  <Products products={products} setProducts={setProducts} salesLogs={salesLogs} settings={settings} />
-                </div>
-                {!isProductsUnlocked && (
-                  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white/20 backdrop-blur-md">
-                    <div className="bg-white p-2 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-stone-200">
-                      <PinLock
-                        title="Authorization Required"
-                        subtitle="Please enter the PIN to manage products."
-                        correctPin={users.find(u => u.email === activeUser)?.pin}
-                        onUnlock={() => setIsProductsUnlocked(true)}
-                        onClose={() => setActiveTab('dashboard')}
-                      />
-                    </div>
-                  </div>
-                )}
+          {isLoading ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center space-y-4">
+                <div className="w-8 h-8 border-2 border-sage border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-stone-400">Loading your data…</p>
               </div>
-            )}
-            {activeTab === 'pos' && (
-              <POS products={products} setProducts={setProducts} salesLogs={salesLogs} setSalesLogs={setSalesLogs} userEmail={activeUser} settings={settings} />
-            )}
-            {activeTab === 'transactions' && (
-              <Transactions salesLogs={salesLogs} products={products} settings={settings} />
-            )}
-            {activeTab === 'settings' && (
-              <Settings 
-                userEmail={activeUser} 
-                userPin={users.find(u => u.email === activeUser)?.pin} 
-                products={products}
-                setProducts={setProducts}
-                salesLogs={salesLogs}
-                setSalesLogs={setSalesLogs}
-                setIsSystemLocked={setIsSystemLocked}
-                onSignOut={handleSignOut}
-                settings={settings}
-                setSettings={setSettings}
-              />
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className={`mx-auto h-full ${['dashboard', 'pos', 'products'].includes(activeTab) ? 'w-full' : 'max-w-7xl'}`}>
+              {activeTab === 'dashboard' && (
+                <Dashboard products={products} salesLogs={salesLogs} setSalesLogs={setSalesLogs} settings={settings} />
+              )}
+              {activeTab === 'products' && (
+                <div className="relative h-full">
+                  <div className={!isProductsUnlocked ? 'blur-md pointer-events-none' : ''}>
+                    <Products products={products} setProducts={setProducts} salesLogs={salesLogs} settings={settings} />
+                  </div>
+                  {!isProductsUnlocked && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-white/20 backdrop-blur-md">
+                      <div className="bg-white p-2 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-stone-200">
+                        <PinLock
+                          title="Authorization Required"
+                          subtitle="Please enter the PIN to manage products."
+                          correctPin={sessionUser?.pin}
+                          onUnlock={() => setIsProductsUnlocked(true)}
+                          onClose={() => setActiveTab('dashboard')}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {activeTab === 'pos' && (
+                <POS products={products} setProducts={setProducts} salesLogs={salesLogs} setSalesLogs={setSalesLogs} userEmail={activeUser} settings={settings} />
+              )}
+              {activeTab === 'transactions' && (
+                <Transactions salesLogs={salesLogs} products={products} settings={settings} />
+              )}
+              {activeTab === 'settings' && (
+                <Settings
+                  userEmail={activeUser}
+                  userPin={sessionUser?.pin}
+                  products={products}
+                  setProducts={setProducts}
+                  salesLogs={salesLogs}
+                  setSalesLogs={setSalesLogs}
+                  setIsSystemLocked={setIsSystemLocked}
+                  onSignOut={handleSignOut}
+                  settings={settings}
+                  setSettings={setSettings}
+                />
+              )}
+            </div>
+          )}
         </main>
       </div>
 
@@ -260,7 +261,7 @@ function App() {
                 <PinLock
                   title="Inventory Locked"
                   subtitle={`Session active for ${activeUser}`}
-                  correctPin={users.find(u => u.email === activeUser)?.pin}
+                  correctPin={sessionUser?.pin}
                   onUnlock={() => setIsQuickLocked(false)}
                 />
               </div>
@@ -271,69 +272,69 @@ function App() {
 
       {isSystemLocked && (
         <div className="fixed inset-0 z-[100] bg-dirty-white flex items-center justify-center p-4">
-          <AuthPage
-            users={users}
-            setUsers={setUsers}
-            onUnlock={handleUnlock}
-          />
+          <AuthPage onUnlock={handleUnlock} />
         </div>
       )}
     </div>
   );
 }
 
-function AuthPage({ users, setUsers, onUnlock }) {
-  const [authMode, setAuthMode] = useState(users.length > 0 ? 'signin' : 'signup');
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH PAGE — Sign In / Sign Up (now fully DB-backed)
+// ─────────────────────────────────────────────────────────────────────────────
+function AuthPage({ onUnlock }) {
+  const [authMode, setAuthMode] = useState('signin');
   const [inputPin, setInputPin] = useState('');
   const [inputEmail, setInputEmail] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [error, setError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isWorking, setIsWorking] = useState(false);
   const [showRecovery, setShowRecovery] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
 
-  const handleSubmit = (e) => {
+  const showError = (msg) => {
+    setErrorMsg(msg || 'Authorization Failed: Invalid Credentials');
+    setError(true);
+    setInputPin('');
+    setTimeout(() => { setError(false); setErrorMsg(''); }, 1200);
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (authMode === 'signup') {
-      if (inputPin.length >= 4 && inputPin === confirmPin && inputEmail.includes('@')) {
-        // Check if user exists
-        if (users.find(u => u.email === inputEmail)) {
-          alert("Account already exists with this email.");
+    setIsWorking(true);
+
+    try {
+      if (authMode === 'signup') {
+        if (inputPin.length < 4 || inputPin !== confirmPin || !inputEmail.includes('@')) {
+          showError('Check your email and make sure PINs match (min 4 digits).');
           return;
         }
-        const newUser = { email: inputEmail, pin: inputPin };
-        setUsers([...users, newUser]);
-        // Also update localStorage immediately for the handleUnlock jump
-        const currentUsers = [...users, newUser];
-        localStorage.setItem('inv_users', JSON.stringify(currentUsers));
-        onUnlock(inputEmail);
+        const exists = await emailExists(inputEmail);
+        if (exists) { showError('Account already exists with this email.'); return; }
+        const newUser = await createUser(inputEmail, inputPin);
+        await onUnlock({ id: newUser.id, email: newUser.email, pin: newUser.pin });
       } else {
-        setError(true);
-        setTimeout(() => setError(false), 1000);
+        if (!inputEmail || !inputPin) { showError(); return; }
+        const found = await findUser(inputEmail, inputPin);
+        if (found) {
+          await onUnlock({ id: found.id, email: found.email, pin: found.pin });
+        } else {
+          showError();
+        }
       }
-      return;
-    }
-
-    const foundUser = users.find(u => u.email === inputEmail && u.pin === inputPin);
-    if (foundUser) {
-      onUnlock(inputEmail);
-    } else {
-      setError(true);
-      setInputPin('');
-      setTimeout(() => setError(false), 1000);
+    } catch (err) {
+      console.error('Auth error:', err);
+      showError('Something went wrong. Please try again.');
+    } finally {
+      setIsWorking(false);
     }
   };
 
   const handleForgotPin = () => {
-    const userToRecover = users.find(u => u.email === inputEmail);
-    if (userToRecover) {
-      setRecoverySent(true);
-      setTimeout(() => {
-        setRecoverySent(false);
-        setShowRecovery(false);
-      }, 3000);
-    } else {
-      alert("No account found with this email.");
-    }
+    if (!inputEmail.includes('@')) { alert('Enter a valid email first.'); return; }
+    setRecoverySent(true);
+    setTimeout(() => { setRecoverySent(false); setShowRecovery(false); }, 3000);
   };
 
   return (
@@ -451,7 +452,7 @@ function AuthPage({ users, setUsers, onUnlock }) {
                     </div>
                   </div>
                   <div className="flex justify-center flex-col items-center gap-2">
-                    {error && <p className="text-muted-orange text-[10px] font-black uppercase tracking-widest animate-bounce text-center">Authorization Failed: Invalid Credentials</p>}
+                    {error && <p className="text-muted-orange text-[10px] font-black uppercase tracking-widest animate-bounce text-center">{errorMsg || 'Authorization Failed: Invalid Credentials'}</p>}
                   </div>
                 </div>
               )}
@@ -459,9 +460,11 @@ function AuthPage({ users, setUsers, onUnlock }) {
               <div className="pt-2 space-y-6">
                 <button
                   type="submit"
-                  className="w-full py-5 bg-deep-charcoal text-white rounded-[2rem] font-black text-xs uppercase tracking-[0.25em] hover:bg-opacity-90 transform active:scale-[0.98] transition-all shadow-[0_20px_40px_-12px_rgba(0,0,0,0.2)]"
+                  disabled={isWorking}
+                  className="w-full py-5 bg-deep-charcoal text-white rounded-[2rem] font-black text-xs uppercase tracking-[0.25em] hover:bg-opacity-90 transform active:scale-[0.98] transition-all shadow-[0_20px_40px_-12px_rgba(0,0,0,0.2)] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-3"
                 >
-                  {authMode === 'signin' ? "Authorize Entry" : "Create My Account"}
+                  {isWorking && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  {authMode === 'signin' ? 'Authorize Entry' : 'Create My Account'}
                 </button>
               </div>
 
@@ -519,12 +522,15 @@ function AuthPage({ users, setUsers, onUnlock }) {
       </div>
 
       <p className="text-center mt-12 text-stone-300 text-[9px] font-black uppercase tracking-[0.4em] opacity-40">
-        Inventory OS &bull; Terminal v1.0.4 &bull; Secure Environment
+        Inventory OS &bull; Terminal v3.0.0 &bull; Cloud Sync Active
       </p>
     </div>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PIN LOCK (unchanged)
+// ─────────────────────────────────────────────────────────────────────────────
 function PinLock({ title, subtitle, correctPin, onUnlock, onClose }) {
   const [input, setInput] = useState('');
   const [error, setError] = useState(false);
@@ -581,6 +587,9 @@ function PinLock({ title, subtitle, correctPin, onUnlock, onClose }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NAV ITEM (unchanged)
+// ─────────────────────────────────────────────────────────────────────────────
 function NavItem({ active, onClick, icon, label, isCollapsed }) {
   return (
     <button
